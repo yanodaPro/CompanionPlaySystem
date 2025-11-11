@@ -5,5 +5,5 @@
 
 # 简介导航  
 # Introduction Navigation
-## 如果你使用中文，请看README CN.md 
-## If you are using English, please read README EN.md
+## 如果你使用中文，请看[README CN.md ](https://github.com/yanodaPro/CompanionPlaySystem/blob/main/README%20CN.md)
+## If you are using English, please read [README EN.md](https://github.com/yanodaPro/CompanionPlaySystem/blob/main/README%20EN.md)
