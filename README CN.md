@@ -157,7 +157,7 @@ BORDER_STYLE = "groove"     # 复古边框样式
 
 ## 许可证
 
-© 2025 yanodaPro and Beautifulday 仅供学习交流使用
+© 2026 yanodaPro and Beautifulday 仅供学习交流使用
 
 ---
 
