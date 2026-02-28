@@ -155,7 +155,7 @@ BORDER_STYLE = "groove"     # Retro border style
 
 ## License
 
-© 2025 yanodaPro and Beautifulday For learning and communication purposes only
+© 2026 yanodaPro and Beautifulday For learning and communication purposes only
 
 ---
 
