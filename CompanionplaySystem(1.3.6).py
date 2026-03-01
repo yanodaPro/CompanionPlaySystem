@@ -162,15 +162,45 @@ def start_daemon(main_pid):
         return None
 
 def stop_daemon():
-    """停止守护进程"""
-    try:
-        if os.path.exists(DAEMON_PID_FILE):
+    """停止所有守护进程，确保它们不会重启主程序"""
+    killed = False
+
+    # 第一步：通过PID文件杀进程
+    if os.path.exists(DAEMON_PID_FILE):
+        try:
             with open(DAEMON_PID_FILE, 'r') as f:
                 pid = int(f.read().strip())
             os.kill(pid, 9)  # 强制终止
-            os.remove(DAEMON_PID_FILE)
-    except:
-        pass
+            # 等待进程退出（最多1秒）
+            for _ in range(10):
+                try:
+                    os.kill(pid, 0)  # 检查进程是否存在
+                    time.sleep(0.1)
+                except OSError:
+                    break
+            killed = True
+        except Exception:
+            pass
+        finally:
+            try:
+                os.remove(DAEMON_PID_FILE)
+            except:
+                pass
+
+    # 第二步：遍历所有进程，查找其他守护进程（可能残留）
+    current_pid = os.getpid()
+    for proc in psutil.process_iter(['pid', 'cmdline']):
+        try:
+            cmdline = proc.info['cmdline']
+            if cmdline and len(cmdline) > 1 and '--daemon' in cmdline:
+                # 如果是守护进程且不是当前进程，强制结束
+                if proc.info['pid'] != current_pid:
+                    proc.kill()
+                    killed = True
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+
+    return killed
 
 def monitor_daemon(main_pid):
     """在主进程中监控守护进程，若消失则重新启动"""
@@ -422,11 +452,14 @@ class AntiCloseApp:
         play_window.protocol("WM_DELETE_WINDOW", play_window.destroy)
 
     def quit_program(self, window=None):
-        """正常退出程序（验证通过后调用）"""
         if window:
             window.destroy()
-        # 停止守护进程，避免重启
+
+        # 停止守护进程（加强版）
         stop_daemon()
+        # 短暂等待，确保守护进程完全退出
+        time.sleep(0.5)
+
         self.root.destroy()
         os._exit(0)
 
