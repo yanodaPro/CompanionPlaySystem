@@ -142,9 +142,15 @@ def add_to_startup():
         print(f"注册表自启动设置失败: {e}")
 
 def start_daemon(main_pid):
-    """启动守护进程（隐藏窗口）"""
+    """启动守护进程（隐藏窗口），若已有守护进程则返回 None"""
+    kernel32 = ctypes.windll.kernel32
+    # 检查是否已有守护进程实例
+    mutex = kernel32.OpenMutexA(0x100000, False, MUTEX_DAEMON.encode())  # SYNCHRONIZE 权限
+    if mutex:
+        kernel32.CloseHandle(mutex)
+        return None  # 已有守护进程，无需启动新进程
+
     try:
-        # 使用CREATE_NO_WINDOW标志隐藏控制台窗口
         startupinfo = subprocess.STARTUPINFO()
         startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
         startupinfo.wShowWindow = 0  # SW_HIDE
@@ -164,64 +170,28 @@ def start_daemon(main_pid):
 def stop_daemon():
     """停止所有守护进程，确保它们不会重启主程序"""
     killed = False
-
-    # 第一步：通过PID文件杀进程
-    if os.path.exists(DAEMON_PID_FILE):
-        try:
-            with open(DAEMON_PID_FILE, 'r') as f:
-                pid = int(f.read().strip())
-            os.kill(pid, 9)  # 强制终止
-            # 等待进程退出（最多1秒）
-            for _ in range(10):
-                try:
-                    os.kill(pid, 0)  # 检查进程是否存在
-                    time.sleep(0.1)
-                except OSError:
-                    break
-            killed = True
-        except Exception:
-            pass
-        finally:
-            try:
-                os.remove(DAEMON_PID_FILE)
-            except:
-                pass
-
-    # 第二步：遍历所有进程，查找其他守护进程（可能残留）
+    # 遍历所有进程，查找守护进程
     current_pid = os.getpid()
     for proc in psutil.process_iter(['pid', 'cmdline']):
         try:
             cmdline = proc.info['cmdline']
             if cmdline and len(cmdline) > 1 and '--daemon' in cmdline:
-                # 如果是守护进程且不是当前进程，强制结束
                 if proc.info['pid'] != current_pid:
                     proc.kill()
                     killed = True
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             pass
-
+    # 删除PID文件
+    try:
+        if os.path.exists(DAEMON_PID_FILE):
+            os.remove(DAEMON_PID_FILE)
+    except:
+        pass
     return killed
-
-def monitor_daemon(main_pid):
-    """在主进程中监控守护进程，若消失则重新启动"""
-    while True:
-        time.sleep(5)
-        try:
-            if os.path.exists(DAEMON_PID_FILE):
-                with open(DAEMON_PID_FILE, 'r') as f:
-                    pid = int(f.read().strip())
-                # 检查进程是否存在
-                os.kill(pid, 0)  # 信号0仅测试存在性
-            else:
-                # PID文件丢失，重新启动
-                start_daemon(main_pid)
-        except (OSError, IOError, ValueError):
-            # 进程不存在或文件错误，重新启动
-            start_daemon(main_pid)
 
 def daemon_loop(main_pid):
     """守护进程主循环：等待主进程结束，然后重启主进程"""
-    # 创建互斥体防止多个守护进程
+    # 创建互斥体防止多个守护进程（此处会确保唯一性，与 start_daemon 中的检查配合）
     kernel32 = ctypes.windll.kernel32
     mutex = kernel32.CreateMutexA(None, False, MUTEX_DAEMON.encode())
     if mutex and kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
@@ -249,11 +219,9 @@ class AntiCloseApp:
     def __init__(self, root):
         # 先进行环境检测（仅在主进程中执行）
         if is_debugger_present():
-            messagebox.showerror("错误", "检测到调试器，程序退出。")
-            os._exit(1)
+            self.exit_with_daemon_cleanup("检测到调试器，程序退出。")
         if is_vm_environment():
-            messagebox.showerror("错误", "检测到虚拟机环境，程序退出。")
-            os._exit(1)
+            self.exit_with_daemon_cleanup("检测到虚拟机环境，程序退出。")
 
         self.root = root
         self.root.title(WINDOW_TITLE)
@@ -313,12 +281,18 @@ class AntiCloseApp:
         )
         self.play_button.pack(pady=10)
 
-        # 启动监控线程
+        # 启动监控线程（仅监控系统进程和关机，不再监控守护进程）
         self.monitor_thread = threading.Thread(target=self.monitor_system, daemon=True)
         self.monitor_thread.start()
 
         self.window_monitor_thread = threading.Thread(target=self.monitor_window_state, daemon=True)
         self.window_monitor_thread.start()
+
+    def exit_with_daemon_cleanup(self, error_msg):
+        """显示错误信息，停止守护进程，然后彻底退出程序"""
+        messagebox.showerror("错误", error_msg)
+        stop_daemon()          # 停止所有守护进程
+        os._exit(1)            # 强制退出主进程
 
     def on_minimize_attempt(self, event=None):
         self.root.deiconify()
@@ -455,7 +429,7 @@ class AntiCloseApp:
         if window:
             window.destroy()
 
-        # 停止守护进程（加强版）
+        # 停止所有守护进程
         stop_daemon()
         # 短暂等待，确保守护进程完全退出
         time.sleep(0.5)
@@ -618,10 +592,7 @@ if __name__ == "__main__":
 
         # 启动守护进程（传入当前PID）
         main_pid = os.getpid()
-        start_daemon(main_pid)
-
-        # 启动监控线程，监视守护进程
-        threading.Thread(target=monitor_daemon, args=(main_pid,), daemon=True).start()
+        start_daemon(main_pid)  # 此函数会检查是否已有守护进程，避免重复启动
 
         # 运行主程序
         root = tk.Tk()
